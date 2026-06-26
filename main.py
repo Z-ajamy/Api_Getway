@@ -251,6 +251,24 @@ async def process_transaction_as(**kwargs):
 
 
 
+def create_sync_rate_limiter(capacity: int, refill_rate: float):
+    tokens = capacity
+    last_time = time.monotonic()
+    def consume(amount=1):
+        nonlocal tokens, last_time
+        ctime = time.monotonic()
+        t = ctime - last_time
+        tokens = min(capacity, tokens + t * refill_rate)
+        last_time = ctime
+    
+        if amount <= tokens:
+            tokens -= amount
+            return True
+        return False
+    return consume
+
+
+
 @time_profiler
 async def asmain():
     rout = Routing_Registry()
@@ -266,13 +284,11 @@ async def asmain():
     data = [{'user_id': 1, 'amount': 3, 'currency': 7},\
          {'user_id': 2, 'amount': 8, 'currency': 10}, \
             {'user_id': 1}, {'user_id': 1, 'amount': 3}]
-    try:
-        await asyncio.gather(get_user_profile_as(**data[0]),process_transaction_as(**data[0]),\
+    await asyncio.gather(get_user_profile_as(**data[0]),process_transaction_as(**data[0]),\
                         get_user_profile_as(**data[1]),process_transaction_as(**data[1]),\
                         get_user_profile_as(**data[2]),process_transaction_as(**data[2]),\
                         get_user_profile_as(**data[3]),process_transaction_as(**data[3]), return_exceptions=True)
-    except ValueError:
-        pass
+        
 
 @time_profiler
 def smain():
@@ -298,3 +314,10 @@ if __name__ == "__main__":
     asyncio.run(asmain(), debug=True)
     smain()
 
+    limiter = create_sync_rate_limiter(capacity=5.0, refill_rate=1.0)
+    for i in range(8):
+        print(limiter(1))
+    print("-------------------")
+    time.sleep(2)
+    for i in range(3):
+        print(limiter(1))
