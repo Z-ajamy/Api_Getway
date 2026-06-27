@@ -267,6 +267,49 @@ def create_sync_rate_limiter(capacity: int, refill_rate: float):
         return False
     return consume
 
+class RateLimitExceeded(Exception):
+    pass
+
+class AsyncRateLimiter:
+    def __init__(self, capacity, refill_rate, *args):
+        self.capacity = capacity
+        self.refill_rate = refill_rate
+        self.users = {}
+
+    async def acquire(self, user_id: str, amount: int = 1):
+        if user_id not in self.users:
+            self.users[user_id] = {
+            "tokens": self.capacity,\
+            "last_time": time.monotonic(),\
+            "lock": asyncio.Lock()\
+            }
+        async with self.users[user_id]["lock"]:
+            await asyncio.sleep(0.05)
+            ctime = time.monotonic()
+            t = ctime - self.users[user_id]["last_time"]
+            
+            current_tokens = self.users[user_id]["tokens"]
+            new_tokens = min(self.capacity, current_tokens + t * self.refill_rate)
+            
+            self.users[user_id]["tokens"] = new_tokens
+            self.users[user_id]["last_time"] = ctime
+            
+            if amount <= self.users[user_id]["tokens"]:
+                self.users[user_id]["tokens"] -= amount
+                return True
+        
+        raise RateLimitExceeded(f"User {user_id} Exceeded")
+
+
+        
+async def worker(limiter, user_id):
+    try:
+        x = await limiter.acquire(user_id)
+        print("Limit")
+    except RateLimitExceeded:
+        print("RateLimitExceeded")
+
+        
 
 
 @time_profiler
@@ -289,6 +332,11 @@ async def asmain():
                         get_user_profile_as(**data[2]),process_transaction_as(**data[2]),\
                         get_user_profile_as(**data[3]),process_transaction_as(**data[3]), return_exceptions=True)
         
+    
+    limiter = AsyncRateLimiter(capacity=5, refill_rate=1)
+    tasks = [worker(limiter, "user_123") for _ in range(15)]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
 
 @time_profiler
 def smain():
@@ -301,7 +349,7 @@ def smain():
     rout.register_route_sync("/2", {"POST"}, fpost)
     print(rout)
 
-    data = [{'user_id': 1, 'amount': 3, 'currency': 7}, {'user_id': 2, 'amount': 8, 'currency': 10}, {'user_id': 1}, {'user_id': 1, 'amount': 3}]
+    data = [{'user_id': 1, 'amount': 3, 'currency': 7}, {'user_id': 2, 'amount': 8, 'currency': 10}, {'user_id': 1}, {'user_id': 1, 'amount': 3}]    
     for i in data:
         try:
             get_user_profile_s(**i)
