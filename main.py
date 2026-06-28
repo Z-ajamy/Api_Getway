@@ -310,6 +310,35 @@ async def worker(limiter, user_id):
         print("RateLimitExceeded")
 
         
+import uuid
+import random
+def request_generator(limit: int):
+    for i in range(limit):
+        yield {"req_id": str(uuid.uuid4())[:8], "user_id": random.randint(1, 3), "path": random.choice(["/2", "/3"]), "method": "POST", "payload": {"amount": 2, "currency": 2}}
+
+class RequestLifecycle:
+    def __init__(self, request_dict):
+        self.req = request_dict
+    async def __aenter__(self):
+        print("[STARTED] Request {} from User {}".format(self.req["req_id"], self.req["user_id"]))
+        return self
+    async def __aexit__(self, exc_type, exc, tb):
+        if exc_type is RateLimitExceeded:
+            print("[DROPPED] Request {} - Rate Limited".format(self.req["req_id"]))
+            return True
+        elif type(exc_type) is ValueError:
+            print("[FAILED] Request {} - Bad Payload: {}".format(self.req["req_id"], exc))
+            return True
+        elif exc_type is None:
+            print("[SUCCESS] Request {} Completed".format(self.req["req_id"]))
+
+
+async def handle_request(request_dict):
+    async with RequestLifecycle(request_dict) as r:
+        await limiter.acquire(request_dict["user_id"])
+        handler = await rout.resolve_route_async(request_dict["path"], request_dict["method"])
+        payload = request_dict.get("payload", {})
+        await handler(user_id=request_dict["user_id"], **payload)
 
 
 @time_profiler
@@ -333,11 +362,17 @@ async def asmain():
                         get_user_profile_as(**data[3]),process_transaction_as(**data[3]), return_exceptions=True)
         
     
-    limiter = AsyncRateLimiter(capacity=5, refill_rate=1)
+    limiter = AsyncRateLimiter(capacity=3, refill_rate=1)
     tasks = [worker(limiter, "user_123") for _ in range(15)]
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
+    limiter = AsyncRateLimiter(capacity=3, refill_rate=0.5)
+    tasks = []
+    for req in request_generator(20):
+        tasks.append(handle_request(req, limiter, rout))
+    await asyncio.gather(*tasks) 
 
+    
 @time_profiler
 def smain():
     rout = Routing_Registry()
