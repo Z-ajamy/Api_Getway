@@ -326,14 +326,14 @@ class RequestLifecycle:
         if exc_type is RateLimitExceeded:
             print("[DROPPED] Request {} - Rate Limited".format(self.req["req_id"]))
             return True
-        elif type(exc_type) is ValueError:
+        elif exc_type is ValueError:
             print("[FAILED] Request {} - Bad Payload: {}".format(self.req["req_id"], exc))
             return True
         elif exc_type is None:
             print("[SUCCESS] Request {} Completed".format(self.req["req_id"]))
 
 
-async def handle_request(request_dict):
+async def handle_request(request_dict, limiter, rout):
     async with RequestLifecycle(request_dict) as r:
         await limiter.acquire(request_dict["user_id"])
         handler = await rout.resolve_route_async(request_dict["path"], request_dict["method"])
@@ -372,7 +372,7 @@ async def asmain():
         tasks.append(handle_request(req, limiter, rout))
     await asyncio.gather(*tasks) 
 
-    
+
 @time_profiler
 def smain():
     rout = Routing_Registry()
