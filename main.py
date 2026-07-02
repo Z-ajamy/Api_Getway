@@ -323,15 +323,16 @@ class RequestLifecycle:
         print("[STARTED] Request {} from User {}".format(self.req["req_id"], self.req["user_id"]))
         return self
     async def __aexit__(self, exc_type, exc, tb):
+        if exc_type is None:
+            print("[SUCCESS] Request {} Completed".format(self.req["req_id"]))
+            return False
+    
         if exc_type is RateLimitExceeded:
             print("[DROPPED] Request {} - Rate Limited".format(self.req["req_id"]))
             return True
-        elif exc_type is ValueError:
+        elif issubclass(exc_type, ValueError):
             print("[FAILED] Request {} - Bad Payload: {}".format(self.req["req_id"], exc))
             return True
-        elif exc_type is None:
-            print("[SUCCESS] Request {} Completed".format(self.req["req_id"]))
-
 
 async def handle_request(request_dict, limiter, rout):
     async with RequestLifecycle(request_dict) as r:
@@ -341,6 +342,46 @@ async def handle_request(request_dict, limiter, rout):
         await handler(user_id=request_dict["user_id"], **payload)
 
 
+
+class Field:
+    pass
+
+class IntField(Field):
+    def __init__(self, min_val: int = None, max_val: int = None):
+        
+        self.min_val = min_val
+        self.max_val = max_val
+
+    def __set_name__(self, owner: type, name: str):
+        self.name = name
+
+    def __get__(self, instance, owner):
+        return instance.__dict__[self.name]
+    def __set__(self, instance, value):
+        
+        if not isinstance(value, int):
+            raise TypeError
+        if self.min_val is not None and value < self.min_val:
+            raise ValueError(f"Value must be >= {self.min_val}")
+        if self.max_val is not None and value > self.max_val:
+            raise ValueError(f"Value must be <= {self.max_val}")
+        
+        if value >= self.min_val and value <= self.max_val:
+            instance.__dict__[self.name] = value 
+        else:
+            raise ValueError
+        
+
+class ModelMeta(type):
+    def __new__(mcs, name, bases, attrs):
+        _f = {}
+        for i in attrs:
+            if isinstance(attrs[i], IntField):
+                _f[i] = attrs[i]
+        attrs["_f"] = _f
+        return super().__new__(mcs, name, bases, attrs)
+
+
 @time_profiler
 async def asmain():
     rout = Routing_Registry()
@@ -348,9 +389,10 @@ async def asmain():
                           rout.register_route_async("/1", {"GET"}, fget),\
                           rout.register_route_async("/2", {"GET"}, fget),\
                           rout.register_route_async("/3", {"GET"}, fget),\
-                          rout.register_route_async("/2", {"POST"}, fpost))
+                          rout.register_route_async("/2", {"POST"}, fpost),\
+                          rout.register_route_async("/2", {"POST"}, process_transaction_as),\
+                          rout.register_route_async("/3", {"GET"}, get_user_profile_as))
     
-    await asyncio.gather(rout.resolve_route_async("/3", "GET"))
     print(rout)
 
     data = [{'user_id': 1, 'amount': 3, 'currency': 7},\
